@@ -56,7 +56,6 @@ PyYAML==6.0.3
 requests==2.31.0
 responses==0.25.8
 s3transfer==0.14.0
-scipy==1.11.4
 setuptools==80.9.0
 simple-websocket==0.10.1
 six==1.17.0
