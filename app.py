@@ -460,15 +460,58 @@ def fetch_mstock_option_chain():
         df_pivot = df.pivot_table(
             index="strike_price",
             columns="option_type",
-            values="ltp",
+            values=["ltp", "oi", "ltpch", "oich"],  # Include OI, change and OI change
             aggfunc="first"
         ).reset_index()
-        df_pivot = df_pivot.rename(columns={"CE": "CE_LTP", "PE": "PE_LTP"})
+        df_pivot = df_pivot.rename(columns={
+            "ltp_CE": "CE_LTP", 
+            "ltp_PE": "PE_LTP", 
+            "oi_CE": "CE_OI", 
+            "oi_PE": "PE_OI", 
+            "ltpch_CE": "CE_Chng", 
+            "ltpch_PE": "PE_Chng",
+            "oich_CE": "CE_OI_Chng",
+            "oich_PE": "PE_OI_Chng"
+        })
 
         return df_pivot.to_json(orient="records")
 
     except Exception as e:
         return jsonify({"error": str(e)})
+
+# ===== Fyers Authentication Routes =====
+@app.route("/fyers_auth", methods=["GET", "POST"])
+@login_required
+def fyers_auth():
+    """Fyers authentication page with login button"""
+    username = session['username']
+    creds = get_user_credentials(username)
+    user_sess = get_user_session(username)
+    
+    if request.method == "POST":
+        if not creds or not creds['client_id'] or not creds['secret_key']:
+            return render_template_string(FYERS_AUTH_TEMPLATE, 
+                                         error="Please setup your Fyers credentials first!",
+                                         show_login_button=False)
+        
+        appSession = fyersModel.SessionModel(
+            client_id=creds['client_id'],
+            secret_key=creds['secret_key'],
+            redirect_uri=user_sess['redirect_uri'],
+            response_type="code",
+            grant_type="authorization_code",
+            state="sample"
+        )
+        
+        login_url = appSession.generate_authcode()
+        return redirect(login_url)
+    
+    # Check if Fyers is already initialized
+    is_authenticated = user_sess['fyers'] is not None
+    
+    return render_template_string(FYERS_AUTH_TEMPLATE, 
+                                is_authenticated=is_authenticated,
+                                show_login_button=True)
 
 # ---- Fyers Functions ----
 def init_fyers_for_user(username, client_id, secret_key, auth_code):
@@ -502,7 +545,7 @@ def init_fyers_for_user(username, client_id, secret_key, auth_code):
         return False
 
 def set_atm_strike(username):
-    """Set the ATM strike based on current market price"""
+    """Set ATM strike based on current market price"""
     user_sess = get_user_session(username)
     
     if user_sess['fyers'] is None:
@@ -533,7 +576,7 @@ def set_atm_strike(username):
         df_pivot = df.pivot_table(
             index="strike_price",
             columns="option_type",
-            values=["ltp", "ltpch", "oich", "volume"],
+            values=["ltp", "ltpch", "oich", "volume", "oi"],  # Added 'oi' for Open Interest
             aggfunc="first"
         ).reset_index()
         
@@ -541,12 +584,14 @@ def set_atm_strike(username):
         df_pivot = df_pivot.rename(columns={
             "ltp_CE": "CE_LTP",
             "ltp_PE": "PE_LTP",
-            "ltpch_CE": "CE_LTPCH",
-            "ltpch_PE": "PE_LTPCH",
-            "oich_CE": "CE_OICH",
-            "oich_PE": "PE_OICH",
+            "ltpch_CE": "CE_Chng",
+            "ltpch_PE": "PE_Chng",
+            "oich_CE": "CE_OI_Chng",
+            "oich_PE": "PE_OI_Chng",
             "volume_CE": "CE_VOLUME",
-            "volume_PE": "PE_VOLUME"
+            "volume_PE": "PE_VOLUME",
+            "oi_CE": "CE_OI",
+            "oi_PE": "PE_OI"
         })
         
         user_sess['initial_data'] = df_pivot.to_dict(orient="records")
@@ -829,7 +874,7 @@ def close_position_by_symbol(username, symbol, qty):
 
         return {"status": "success"}
     except Exception as e:
-        print(f"❌ Close position error for {username}:", e)
+        print(f"❌ Close position error for {username}: {e}")
         return None
 
 def close_position(username, order_id):
@@ -876,7 +921,7 @@ def close_position(username, order_id):
 
         return response
     except Exception as e:
-        print(f"❌ Close position error for {username}:", e)
+        print(f"❌ Close position error for {username}: {e}")
         return None
 
 def get_positions(username):
@@ -890,7 +935,7 @@ def get_positions(username):
         response = user_sess['fyers'].positions()
         return response
     except Exception as e:
-        print(f"❌ Get positions error for {username}:", e)
+        print(f"❌ Get positions error for {username}: {e}")
         return None
 
 def get_order_book(username):
@@ -904,7 +949,7 @@ def get_order_book(username):
         response = user_sess['fyers'].orderbook()
         return response
     except Exception as e:
-        print(f"❌ Get order book error for {username}:", e)
+        print(f"❌ Get order book error for {username}: {e}")
         return None
 
 def process_option_chain(username, df_pivot, response):
@@ -971,7 +1016,7 @@ def background_bot_worker(username):
             df_pivot = df.pivot_table(
                 index="strike_price",
                 columns="option_type",
-                values=["ltp", "ltpch", "oich", "volume"],
+                values=["ltp", "ltpch", "oich", "volume", "oi"],  # Added 'oi' for Open Interest
                 aggfunc="first"
             ).reset_index()
 
@@ -980,12 +1025,14 @@ def background_bot_worker(username):
             df_pivot = df_pivot.rename(columns={
                 "ltp_CE": "CE_LTP",
                 "ltp_PE": "PE_LTP",
-                "ltpch_CE": "CE_LTPCH",
-                "ltpch_PE": "PE_LTPCH",
-                "oich_CE": "CE_OICH",
-                "oich_PE": "PE_OICH",
+                "ltpch_CE": "CE_Chng",
+                "ltpch_PE": "PE_Chng",
+                "oich_CE": "CE_OI_Chng",
+                "oich_PE": "PE_OI_Chng",
                 "volume_CE": "CE_VOLUME",
-                "volume_PE": "PE_VOLUME"
+                "volume_PE": "PE_VOLUME",
+                "oi_CE": "CE_OI",
+                "oi_PE": "PE_OI"
             })
 
             process_option_chain(username, df_pivot, response)
@@ -1053,6 +1100,9 @@ def logout():
 def index():
     username = session['username']
     user_sess = get_user_session(username)
+    
+    # Check Fyers authentication status
+    fyers_authenticated = user_sess['fyers'] is not None
 
     if request.method == "POST":
         try:
@@ -1093,7 +1143,8 @@ def index():
         quantity=user_sess['quantity'],
         ce_offset=user_sess['ce_offset'],
         pe_offset=user_sess['pe_offset'],
-        atm_strike=user_sess['atm_strike']
+        atm_strike=user_sess['atm_strike'],
+        fyers_authenticated=fyers_authenticated
     )
 
 @app.route("/setup_credentials", methods=["GET", "POST"])
@@ -1146,7 +1197,7 @@ def callback(username):
             save_user_credentials(username, auth_code=auth_code)
             if init_fyers_for_user(username, creds['client_id'], creds['secret_key'], auth_code):
                 set_atm_strike(username)
-                return "<h2>✅ Authentication Successful! You can return to the app 🚀</h2>"
+                return "<h2>✅ Authentication Successful! You can return to app 🚀</h2>"
     return "❌ Authentication failed. Please retry."
 
 @app.route("/fetch")
@@ -1178,7 +1229,7 @@ def fetch_option_chain():
         df_pivot = df.pivot_table(
             index="strike_price",
             columns="option_type",
-            values=["ltp", "ltpch", "oich", "volume"],
+            values=["ltp", "ltpch", "oich", "volume", "oi"],  # Added 'oi' for Open Interest
             aggfunc="first"
         ).reset_index()
 
@@ -1187,12 +1238,14 @@ def fetch_option_chain():
         df_pivot = df_pivot.rename(columns={
             "ltp_CE": "CE_LTP",
             "ltp_PE": "PE_LTP",
-            "ltpch_CE": "CE_LTPCH",
-            "ltpch_PE": "PE_LTPCH",
-            "oich_CE": "CE_OICH",
-            "oich_PE": "PE_OICH",
+            "ltpch_CE": "CE_Chng",
+            "ltpch_PE": "PE_Chng",
+            "oich_CE": "CE_OI_Chng",
+            "oich_PE": "PE_OI_Chng",
             "volume_CE": "CE_VOLUME",
-            "volume_PE": "PE_VOLUME"
+            "volume_PE": "PE_VOLUME",
+            "oi_CE": "CE_OI",
+            "oi_PE": "PE_OI"
         })
 
         process_option_chain(username, df_pivot, response)
@@ -1647,14 +1700,35 @@ MSTOCK_OPTION_CHAIN_TEMPLATE = """
   <style>
     body { font-family: Arial, sans-serif; background: #f7f7f7; padding: 20px; }
     h2 { color: #007bff; text-align: center; }
-    table { border-collapse: collapse; width: 70%; margin: 20px auto; }
-    th, td { border: 1px solid #aaa; padding: 8px; text-align: center; }
+    table { border-collapse: collapse; width: 95%; margin: 20px auto; font-size: 12px; }
+    th, td { border: 1px solid #aaa; padding: 6px; text-align: center; }
     th { background-color: #007bff; color: white; }
     tr:nth-child(even) { background-color: #f2f2f2; }
     .back-link { text-align: center; margin-top: 20px; }
     .back-link a { color: #667eea; text-decoration: none; }
+    .strike-column { font-weight: bold; min-width: 60px; }
+    .ltp-column { min-width: 60px; }
+    .change-column { min-width: 60px; font-weight: bold; }
+    .oi-column { min-width: 70px; font-weight: bold; }
+    .volume-column { min-width: 70px; }
+    .negative { color: red; }
+    .positive { color: green; }
+    .section-header { background-color: #e9ecef; font-weight: bold; }
   </style>
   <script>
+    function formatNumber(num) {
+        if (num === null || num === undefined || num === '-') return '-';
+        return parseInt(num).toLocaleString();
+    }
+    
+    function formatChange(num) {
+        if (num === null || num === undefined || num === '-') return '-';
+        const value = parseFloat(num);
+        const formatted = value > 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+        const className = value < 0 ? 'negative' : 'positive';
+        return `<span class="${className}">${formatted}</span>`;
+    }
+
     async function fetchChain(){
         let res = await fetch("/fetch_mstock_option_chain");
         let data = await res.json();
@@ -1662,15 +1736,23 @@ MSTOCK_OPTION_CHAIN_TEMPLATE = """
         tbl.innerHTML = "";
 
         if(data.error){
-            tbl.innerHTML = `<tr><td colspan="3">${data.error}</td></tr>`;
+            tbl.innerHTML = `<tr><td colspan="9">${data.error}</td></tr>`;
             return;
         }
 
         data.forEach(row=>{
             tbl.innerHTML += `<tr>
-                <td>${row.strike_price}</td>
-                <td>${row.CE_LTP}</td>
-                <td>${row.PE_LTP}</td>
+                <td class="strike-column">${row.strike_price}</td>
+                <td class="ltp-column">${row.CE_LTP || '-'}</td>
+                <td class="change-column">${formatChange(row.CE_Chng)}</td>
+                <td class="oi-column">${formatNumber(row.CE_OI)}</td>
+                <td class="change-column">${formatChange(row.CE_OI_Chng)}</td>
+                <td class="volume-column">${formatNumber(row.CE_VOLUME)}</td>
+                <td class="volume-column">${formatNumber(row.PE_VOLUME)}</td>
+                <td class="change-column">${formatChange(row.PE_OI_Chng)}</td>
+                <td class="oi-column">${formatNumber(row.PE_OI)}</td>
+                <td class="change-column">${formatChange(row.PE_Chng)}</td>
+                <td class="ltp-column">${row.PE_LTP || '-'}</td>
             </tr>`;
         });
     }
@@ -1682,13 +1764,96 @@ MSTOCK_OPTION_CHAIN_TEMPLATE = """
 <body>
   <h2>Live NIFTY50 Option Chain (m.Stock)</h2>
   <table>
-    <thead><tr><th>Strike</th><th>CE LTP</th><th>PE LTP</th></tr></thead>
+    <thead>
+        <tr>
+            <th rowspan="2">Strike</th>
+            <th colspan="5" class="section-header">Call Option</th>
+            <th colspan="5" class="section-header">Put Option</th>
+        </tr>
+        <tr>
+            <th>LTP</th>
+            <th>Change</th>
+            <th>OI</th>
+            <th>OI Chg</th>
+            <th>Volume</th>
+            <th>Volume</th>
+            <th>OI Chg</th>
+            <th>OI</th>
+            <th>Change</th>
+            <th>LTP</th>
+        </tr>
+    </thead>
     <tbody id="chain"></tbody>
   </table>
   <div class="back-link">
     <a href="/mstock_auth">← Back to mStock Authentication</a> | 
     <a href="/">← Main Dashboard</a>
   </div>
+</body>
+</html>
+"""
+
+FYERS_AUTH_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fyers Authentication</title>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+        .container { background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2, h3 { text-align: center; }
+        .form-container { background-color: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="submit"] { width: 100%; padding: 12px; border-radius: 4px; font-size: 16px; }
+        input[type="submit"] { background-color: #007bff; color: white; border: none; cursor: pointer; }
+        input[type="submit"]:hover { background-color: #0069d9; }
+        .success { color: green; background-color: #dff0d8; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .error { color: red; background-color: #f2dede; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .logout-btn { background-color: #dc3545; }
+        .logout-btn:hover { background-color: #c82333; }
+        .hidden { display: none; }
+        .back-link { text-align: center; margin-top: 20px; }
+        .back-link a { color: #667eea; text-decoration: none; }
+        .auth-status { text-align: center; margin: 20px 0; }
+        .status-badge { padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+        .status-success { background-color: #d4edda; color: #155724; }
+        .status-warning { background-color: #fff3cd; color: #856404; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Fyers API Authentication</h2>
+        
+        {% if is_authenticated %}
+            <div class="auth-status">
+                <span class="status-badge status-success">✅ Fyers is Authenticated</span>
+            </div>
+        {% else %}
+            <div class="auth-status">
+                <span class="status-badge status-warning">⚠️ Fyers is Not Authenticated</span>
+            </div>
+        {% endif %}
+
+        {% if show_login_button and not is_authenticated %}
+            <div class="form-container">
+                <h3>Login to Fyers</h3>
+                <form method="POST">
+                    <input type="submit" value="Login with Fyers">
+                </form>
+            </div>
+        {% endif %}
+
+        {% if error %}
+            <div class="error">
+                <strong>Error:</strong> {{ error }}
+            </div>
+        {% endif %}
+
+        <div class="back-link">
+            <a href="/">← Back to Main Dashboard</a>
+        </div>
+    </div>
 </body>
 </html>
 """
@@ -1706,7 +1871,7 @@ MAIN_TEMPLATE = """
         .nav { text-align: center; margin-top: 10px; }
         .nav a { margin: 0 15px; color: #667eea; text-decoration: none; font-weight: bold; }
         .nav a:hover { text-decoration: underline; }
-        .container { max-width: 1200px; margin: 20px auto; padding: 0 20px; }
+        .container { max-width: 1600px; margin: 20px auto; padding: 0 20px; }
         .card { background: white; border-radius: 10px; padding: 25px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
         .card h2 { color: #333; margin-bottom: 20px; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
         .form-group { margin-bottom: 15px; }
@@ -1725,8 +1890,8 @@ MAIN_TEMPLATE = """
         .status-success { background: #d4edda; color: #155724; }
         .status-error { background: #f8d7da; color: #721c24; }
         .status-info { background: #d1ecf1; color: #0c5460; }
-        .table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        .table th, .table td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
+        .table th, .table td { padding: 8px; text-align: center; border-bottom: 1px solid #ddd; }
         .table th { background: #f8f9fa; font-weight: bold; }
         .table tr:hover { background: #f5f5f5; }
         .atm-strike { font-size: 18px; font-weight: bold; color: #667eea; text-align: center; margin: 15px 0; }
@@ -1741,6 +1906,58 @@ MAIN_TEMPLATE = """
         .broker-badge { padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: bold; }
         .broker-fyers { background: #007bff; color: white; }
         .broker-mstock { background: #28a745; color: white; }
+        .auth-status { text-align: center; margin: 20px 0; }
+        .status-badge { padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+        .status-success { background-color: #d4edda; color: #155724; }
+        .status-warning { background-color: #fff3cd; color: #856404; }
+        
+        /* Option chain styling */
+        .strike-column { font-weight: bold; min-width: 60px; }
+        .ltp-column { min-width: 60px; }
+        .change-column { min-width: 60px; font-weight: bold; }
+        .oi-column { min-width: 70px; font-weight: bold; }
+        .volume-column { min-width: 70px; }
+        .negative { color: red; }
+        .positive { color: green; }
+        .section-header { background-color: #e9ecef; font-weight: bold; }
+        
+        /* Highlighting styles for option chain */
+        .atm-row {
+            background-color: #e3f2fd !important;
+            font-weight: bold;
+        }
+
+        .ce-offset-row {
+            background-color: #e8f5e9 !important;
+            font-weight: bold;
+        }
+
+        .pe-offset-row {
+            background-color: #fff3e0 !important;
+            font-weight: bold;
+        }
+
+        .row-label {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            margin-right: 5px;
+            font-weight: bold;
+            color: white;
+        }
+
+        .atm-row .row-label {
+            background-color: #2196f3;
+        }
+
+        .ce-offset-row .row-label {
+            background-color: #4caf50;
+        }
+
+        .pe-offset-row .row-label {
+            background-color: #ff9800;
+        }
     </style>
 </head>
 <body>
@@ -1750,6 +1967,7 @@ MAIN_TEMPLATE = """
         <div class="nav">
             <a href="/">Dashboard</a>
             <a href="/mstock_auth">mStock Auth</a>
+            <a href="/fyers_auth">Fyers Auth</a>
             <a href="/setup_credentials">Fyers Setup</a>
             <a href="/logout">Logout</a>
         </div>
@@ -1795,6 +2013,14 @@ MAIN_TEMPLATE = """
 
         <div class="card">
             <h2>📊 Market Data</h2>
+            <div class="auth-status">
+                {% if fyers_authenticated %}
+                    <span class="status-badge status-success">✅ Fyers is Authenticated</span>
+                {% else %}
+                    <span class="status-badge status-warning">⚠️ Fyers is Not Authenticated</span>
+                    <p>Please <a href="/fyers_auth">login with Fyers</a> to access market data</p>
+                {% endif %}
+            </div>
             {% if atm_strike %}
                 <div class="atm-strike">ATM Strike: {{ atm_strike }}</div>
             {% endif %}
@@ -1852,6 +2078,19 @@ MAIN_TEMPLATE = """
             setTimeout(() => statusDiv.innerHTML = '', 5000);
         }
 
+        function formatNumber(num) {
+            if (num === null || num === undefined || num === '-') return '-';
+            return parseInt(num).toLocaleString();
+        }
+        
+        function formatChange(num) {
+            if (num === null || num === undefined || num === '-') return '-';
+            const value = parseFloat(num);
+            const formatted = value > 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+            const className = value < 0 ? 'negative' : 'positive';
+            return `<span class="${className}">${formatted}</span>`;
+        }
+
         async function fetchOptionChain() {
             try {
                 const response = await fetch('/fetch');
@@ -1863,18 +2102,63 @@ MAIN_TEMPLATE = """
                 }
 
                 const atmStrike = data.pop().atm_strike;
+                // Get the offset values from the form inputs
+                const ceOffset = parseInt(document.querySelector('input[name="ce_offset"]').value) || -300;
+                const peOffset = parseInt(document.querySelector('input[name="pe_offset"]').value) || 300;
+                
+                // Calculate the offset strikes
+                const ceOffsetStrike = atmStrike + ceOffset;
+                const peOffsetStrike = atmStrike + peOffset;
+                
                 let html = `<div class="atm-strike">ATM Strike: ${atmStrike}</div>`;
-                html += '<table class="table"><thead><tr><th>Strike</th><th>CE LTP</th><th>PE LTP</th><th>CE Change</th><th>PE Change</th><th>CE Volume</th><th>PE Volume</th></tr></thead><tbody>';
+                html += '<table class="table"><thead>';
+                html += '<tr>';
+                html += '<th rowspan="2">Strike</th>';
+                html += '<th colspan="5" class="section-header">Call Option</th>';
+                html += '<th colspan="5" class="section-header">Put Option</th>';
+                html += '</tr>';
+                html += '<tr>';
+                html += '<th>LTP</th>';
+                html += '<th>Change</th>';
+                html += '<th>OI</th>';
+                html += '<th>OI Chg</th>';
+                html += '<th>Volume</th>';
+                html += '<th>Volume</th>';
+                html += '<th>OI Chg</th>';
+                html += '<th>OI</th>';
+                html += '<th>Change</th>';
+                html += '<th>LTP</th>';
+                html += '</tr>';
+                html += '</thead><tbody>';
                 
                 data.forEach(row => {
-                    html += `<tr>
-                        <td>${row.strike_price}</td>
-                        <td>${row.CE_LTP || '-'}</td>
-                        <td>${row.PE_LTP || '-'}</td>
-                        <td>${row.CE_LTPCH || '-'}</td>
-                        <td>${row.PE_LTPCH || '-'}</td>
-                        <td>${row.CE_VOLUME || '-'}</td>
-                        <td>${row.PE_VOLUME || '-'}</td>
+                    // Determine if this row should be highlighted
+                    let rowClass = '';
+                    let rowLabel = '';
+                    
+                    if (row.strike_price === atmStrike) {
+                        rowClass = 'atm-row';
+                        rowLabel = '<span class="row-label">ATM</span>';
+                    } else if (row.strike_price === ceOffsetStrike) {
+                        rowClass = 'ce-offset-row';
+                        rowLabel = '<span class="row-label">CE Offset</span>';
+                    } else if (row.strike_price === peOffsetStrike) {
+                        rowClass = 'pe-offset-row';
+                        rowLabel = '<span class="row-label">PE Offset</span>';
+                    }
+                    
+                    html += `<tr class="${rowClass}">
+                        <td class="strike-column">${rowLabel} ${row.strike_price}</td>
+                        <td class="ltp-column">${row.CE_LTP || '-'}</td>
+                        <td class="change-column">${formatChange(row.CE_Chng)}</td>
+                        <td class="oi-column">${formatNumber(row.CE_OI)}</td>
+                        <td class="change-column">${formatChange(row.CE_OI_Chng)}</td>
+                        <td class="volume-column">${formatNumber(row.CE_VOLUME)}</td>
+                        <td class="volume-column">${formatNumber(row.PE_VOLUME)}</td>
+                        <td class="change-column">${formatChange(row.PE_OI_Chng)}</td>
+                        <td class="oi-column">${formatNumber(row.PE_OI)}</td>
+                        <td class="change-column">${formatChange(row.PE_Chng)}</td>
+                        <td class="ltp-column">${row.PE_LTP || '-'}</td>
                     </tr>`;
                 });
                 
@@ -1990,10 +2274,12 @@ MAIN_TEMPLATE = """
                 
                 if (data.positions && data.positions.netPositions) {
                     data.positions.netPositions.forEach(position => {
+                        const plValue = parseFloat(position.pl);
+                        const plClass = plValue < 0 ? 'negative' : 'positive';
                         html += `<tr>
                             <td>${position.symbol}</td>
                             <td>${position.netQty}</td>
-                            <td>${position.pl}</td>
+                            <td class="${plClass}">${position.pl}</td>
                             <td>
                                 <button onclick="closePositionBySymbol('${position.symbol}', ${Math.abs(position.netQty)})" class="btn btn-warning">Close</button>
                             </td>
@@ -2146,6 +2432,9 @@ if __name__ == "__main__":
     print("  GET  /mstock/status - Check authentication status")
     print("  GET  /mstock_auth - mStock authentication UI")
     print("  GET  /mstock_option_chain - mStock option chain view")
+    print("\nFyers API Routes:")
+    print("  GET  /fyers_auth - Fyers authentication UI")
+    print("  GET  /fyers_login - Direct Fyers login")
     print("\nDual Broker Routes:")
     print("  POST /place_dual_order - Place order with both brokers")
     print("  POST /cancel_dual_order - Cancel order with specified broker(s)")
