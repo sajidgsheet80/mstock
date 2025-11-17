@@ -16,13 +16,12 @@ app = Flask(__name__)
 app.secret_key = "sajid_secret_key_change_this"
 
 # ===== m.Stock API Credentials =====
-MSTOCK_API_KEY = 'CJOHJvQ/lUBtRZSXIVAtd3wkLRaSDpVGbO92K+FAIo8='
+# Fixed API secret for all users
 MSTOCK_API_SECRET = '<your_api_secret_here>'
 
 # Text files for storing data
 USERS_FILE = "users.txt"
 CREDENTIALS_FILE = "user_credentials.txt"
-ORDERS_FILE = "orders.txt"
 
 # Initialize files
 def init_files():
@@ -31,9 +30,6 @@ def init_files():
             f.write("")
     if not os.path.exists(CREDENTIALS_FILE):
         with open(CREDENTIALS_FILE, 'w') as f:
-            f.write("")
-    if not os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'w') as f:
             f.write("")
 
 init_files()
@@ -61,18 +57,28 @@ def verify_user(username, password):
         return user
     return None
 
-def save_user_credentials(username, client_id=None, secret_key=None, auth_code=None):
+def save_user_credentials(username, client_id=None, secret_key=None, auth_code=None, mstock_api_key=None):
     credentials = {}
     if os.path.exists(CREDENTIALS_FILE):
         with open(CREDENTIALS_FILE, 'r') as f:
             for line in f:
                 if line.strip():
                     parts = line.strip().split('|')
-                    if len(parts) >= 4:
-                        credentials[parts[0]] = {'client_id': parts[1], 'secret_key': parts[2], 'auth_code': parts[3]}
+                    if len(parts) >= 5:
+                        credentials[parts[0]] = {
+                            'client_id': parts[1], 
+                            'secret_key': parts[2], 
+                            'auth_code': parts[3],
+                            'mstock_api_key': parts[4]
+                        }
 
     if username not in credentials:
-        credentials[username] = {'client_id': '', 'secret_key': '', 'auth_code': ''}
+        credentials[username] = {
+            'client_id': '', 
+            'secret_key': '', 
+            'auth_code': '',
+            'mstock_api_key': ''
+        }
 
     if client_id:
         credentials[username]['client_id'] = client_id
@@ -80,10 +86,12 @@ def save_user_credentials(username, client_id=None, secret_key=None, auth_code=N
         credentials[username]['secret_key'] = secret_key
     if auth_code:
         credentials[username]['auth_code'] = auth_code
+    if mstock_api_key:
+        credentials[username]['mstock_api_key'] = mstock_api_key
 
     with open(CREDENTIALS_FILE, 'w') as f:
         for user, creds in credentials.items():
-            f.write(f"{user}|{creds['client_id']}|{creds['secret_key']}|{creds['auth_code']}\n")
+            f.write(f"{user}|{creds['client_id']}|{creds['secret_key']}|{creds['auth_code']}|{creds['mstock_api_key']}\n")
 
 def get_user_credentials(username):
     if not os.path.exists(CREDENTIALS_FILE):
@@ -92,62 +100,14 @@ def get_user_credentials(username):
         for line in f:
             if line.strip():
                 parts = line.strip().split('|')
-                if len(parts) >= 4 and parts[0] == username:
-                    return {'client_id': parts[1], 'secret_key': parts[2], 'auth_code': parts[3]}
+                if len(parts) >= 5 and parts[0] == username:
+                    return {
+                        'client_id': parts[1], 
+                        'secret_key': parts[2], 
+                        'auth_code': parts[3],
+                        'mstock_api_key': parts[4]
+                    }
     return None
-
-def save_order(username, order_data):
-    orders = []
-    if os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'r') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        orders.append(json.loads(line.strip()))
-                    except:
-                        pass
-
-    order_data['username'] = username
-    order_data['timestamp'] = datetime.now().isoformat()
-    orders.append(order_data)
-
-    with open(ORDERS_FILE, 'w') as f:
-        for order in orders:
-            f.write(json.dumps(order) + "\n")
-
-def get_user_orders(username):
-    orders = []
-    if os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'r') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        order = json.loads(line.strip())
-                        if order.get('username') == username:
-                            orders.append(order)
-                    except:
-                        pass
-    return orders
-
-def update_order_status(username, order_id, status):
-    orders = []
-    if os.path.exists(ORDERS_FILE):
-        with open(ORDERS_FILE, 'r') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        orders.append(json.loads(line.strip()))
-                    except:
-                        pass
-
-    for order in orders:
-        if order.get('username') == username and order.get('order_id') == order_id:
-            order['status'] = status
-            order['updated_at'] = datetime.now().isoformat()
-
-    with open(ORDERS_FILE, 'w') as f:
-        for order in orders:
-            f.write(json.dumps(order) + "\n")
 
 def login_required(f):
     @wraps(f)
@@ -193,6 +153,13 @@ def login_mstock():
     """OTP-based m.Stock authentication"""
     username = session['username']
     user_sess = get_user_session(username)
+    creds = get_user_credentials(username)
+    
+    if not creds or not creds['mstock_api_key']:
+        return jsonify({
+            "status": "error",
+            "message": "mStock API key not configured. Please setup your mStock credentials first."
+        }), 400
     
     if request.method == "GET":
         access_token = user_sess.get('mstock_access_token')
@@ -218,9 +185,9 @@ def login_mstock():
             "message": "OTP is required"
         }), 400
     
-    checksum = hashlib.sha256(f"{MSTOCK_API_KEY}{totp}{MSTOCK_API_SECRET}".encode()).hexdigest()
+    checksum = hashlib.sha256(f"{creds['mstock_api_key']}{totp}{MSTOCK_API_SECRET}".encode()).hexdigest()
     headers = {'X-Mirae-Version': '1', 'Content-Type': 'application/x-www-form-urlencoded'}
-    data = {'api_key': MSTOCK_API_KEY, 'totp': totp, 'checksum': checksum}
+    data = {'api_key': creds['mstock_api_key'], 'totp': totp, 'checksum': checksum}
     
     try:
         response = requests.post(
@@ -288,7 +255,7 @@ def refresh_mstock_token():
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         data = {
-            'api_key': MSTOCK_API_KEY,
+            'api_key': get_user_credentials(username)['mstock_api_key'],
             'refresh_token': refresh_token
         }
         
@@ -382,6 +349,7 @@ def mstock_auth_page():
     """m.Stock authentication UI page"""
     username = session['username']
     user_sess = get_user_session(username)
+    creds = get_user_credentials(username)
     access_token = user_sess.get('mstock_access_token')
     error = None
 
@@ -390,33 +358,36 @@ def mstock_auth_page():
         if not totp:
             error = "OTP is required!"
         else:
-            checksum = hashlib.sha256(f"{MSTOCK_API_KEY}{totp}{MSTOCK_API_SECRET}".encode()).hexdigest()
-            headers = {'X-Mirae-Version': '1', 'Content-Type': 'application/x-www-form-urlencoded'}
-            data = {'api_key': MSTOCK_API_KEY, 'totp': totp, 'checksum': checksum}
-            try:
-                response = requests.post(
-                    'https://api.mstock.trade/openapi/typea/session/verifytotp',
-                    headers=headers,
-                    data=data
-                )
-                resp_json = response.json()
-                if resp_json.get("status") == "success":
-                    access_token = resp_json["data"]["access_token"]
-                    access_token_expiry = time.time() + resp_json["data"].get("expires_in", 3600)
-                    user_sess['mstock_access_token'] = access_token
-                    user_sess['mstock_access_token_expiry'] = access_token_expiry
-                    
-                    if "refresh_token" in resp_json["data"]:
-                        refresh_token = resp_json["data"]["refresh_token"]
-                        refresh_token_expiry = time.time() + resp_json["data"].get("refresh_token_expires_in", 86400)
-                        user_sess['mstock_refresh_token'] = refresh_token
-                        user_sess['mstock_refresh_token_expiry'] = refresh_token_expiry
-                else:
-                    error = resp_json.get("message", "Failed to generate session")
-            except Exception as e:
-                error = f"Error verifying OTP: {str(e)}"
+            if not creds or not creds['mstock_api_key']:
+                error = "mStock API key not configured. Please setup your mStock credentials first."
+            else:
+                checksum = hashlib.sha256(f"{creds['mstock_api_key']}{totp}{MSTOCK_API_SECRET}".encode()).hexdigest()
+                headers = {'X-Mirae-Version': '1', 'Content-Type': 'application/x-www-form-urlencoded'}
+                data = {'api_key': creds['mstock_api_key'], 'totp': totp, 'checksum': checksum}
+                try:
+                    response = requests.post(
+                        'https://api.mstock.trade/openapi/typea/session/verifytotp',
+                        headers=headers,
+                        data=data
+                    )
+                    resp_json = response.json()
+                    if resp_json.get("status") == "success":
+                        access_token = resp_json["data"]["access_token"]
+                        access_token_expiry = time.time() + resp_json["data"].get("expires_in", 3600)
+                        user_sess['mstock_access_token'] = access_token
+                        user_sess['mstock_access_token_expiry'] = access_token_expiry
+                        
+                        if "refresh_token" in resp_json["data"]:
+                            refresh_token = resp_json["data"]["refresh_token"]
+                            refresh_token_expiry = time.time() + resp_json["data"].get("refresh_token_expires_in", 86400)
+                            user_sess['mstock_refresh_token'] = refresh_token
+                            user_sess['mstock_refresh_token_expiry'] = refresh_token_expiry
+                    else:
+                        error = resp_json.get("message", "Failed to generate session")
+                except Exception as e:
+                    error = f"Error verifying OTP: {str(e)}"
 
-    return render_template_string(MSTOCK_AUTH_TEMPLATE, access_token=access_token, error=error)
+    return render_template_string(MSTOCK_AUTH_TEMPLATE, access_token=access_token, error=error, mstock_api_key=creds['mstock_api_key'] if creds else "")
 
 # New route for mStock option chain page
 @app.route("/mstock_option_chain")
@@ -437,7 +408,9 @@ def fetch_mstock_option_chain():
     """Fetch live option chain data from m.Stock API"""
     username = session['username']
     user_sess = get_user_session(username)
+    creds = get_user_credentials(username)
     access_token = user_sess.get('mstock_access_token')
+    
     if not access_token:
         return jsonify({"error": "Please authenticate with mStock first!"})
 
@@ -608,6 +581,7 @@ def set_atm_strike(username):
 def place_mstock_order(username, symbol, transaction_type, quantity, order_type="MARKET", price=0, product="MIS"):
     """Place an order with mStock broker"""
     user_sess = get_user_session(username)
+    creds = get_user_credentials(username)
     access_token = user_sess.get('mstock_access_token')
     
     if not access_token:
@@ -631,7 +605,7 @@ def place_mstock_order(username, symbol, transaction_type, quantity, order_type=
         # Prepare headers
         headers = {
             'X-Mirae-Version': '1',
-            'Authorization': f'token {MSTOCK_API_KEY}:{access_token}',
+            'Authorization': f'token {creds["mstock_api_key"]}:{access_token}',
             'Content-Type': 'application/x-www-form-urlencoded',
         }
         
@@ -647,19 +621,6 @@ def place_mstock_order(username, symbol, transaction_type, quantity, order_type=
         if resp_json.get("status") == "success":
             order_id = resp_json.get("data", {}).get("orderid")
             print(f"✅ mStock order placed for {username}: {order_id}")
-            
-            # Save the order
-            order_data = {
-                'order_id': order_id,
-                'symbol': symbol,
-                'price': price,
-                'transaction_type': transaction_type,
-                'quantity': quantity,
-                'status': 'PLACED',
-                'type': 'OPEN',
-                'broker': 'mStock'
-            }
-            save_order(username, order_data)
             
             return {
                 "status": "success",
@@ -710,21 +671,6 @@ def place_order(username, symbol, price, side):
             }
             fyers_response = user_sess['fyers'].place_order(data=data)
             print(f"✅ Fyers order placed for {username}:", fyers_response)
-
-            if fyers_response and fyers_response.get('s') == 'ok':
-                order_id = fyers_response.get('id')
-                order_data = {
-                    'order_id': order_id,
-                    'symbol': symbol,
-                    'price': price,
-                    'side': side,
-                    'qty': user_sess['quantity'],
-                    'status': 'PLACED',
-                    'type': 'OPEN',
-                    'broker': 'Fyers'
-                }
-                save_order(username, order_data)
-                user_sess['open_orders'].append(order_id)
     except Exception as e:
         print(f"❌ Fyers order error for {username}:", e)
         fyers_response = {"status": "error", "message": str(e)}
@@ -759,198 +705,6 @@ def place_order(username, symbol, price, side):
         "fyers": fyers_response,
         "mstock": mstock_response
     }
-
-def cancel_order(username, order_id):
-    """Cancel order with Fyers"""
-    user_sess = get_user_session(username)
-    try:
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-            return None
-
-        data = {"id": order_id}
-        response = user_sess['fyers'].cancel_order(data=data)
-        print(f"✅ Order cancelled for {username}:", response)
-
-        if response and response.get('s') == 'ok':
-            update_order_status(username, order_id, 'CANCELLED')
-            if order_id in user_sess['open_orders']:
-                user_sess['open_orders'].remove(order_id)
-
-        return response
-    except Exception as e:
-        print(f"❌ Cancel order error for {username}:", e)
-        return None
-
-def cancel_all_orders(username):
-    """Cancel all orders with Fyers"""
-    user_sess = get_user_session(username)
-    try:
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-            return None
-
-        response = user_sess['fyers'].orderbook()
-        if not response or 'orderBook' not in response:
-            return None
-
-        pending_orders = [order for order in response['orderBook'] if order['status'] == 1]
-
-        cancelled_orders = []
-        for order in pending_orders:
-            data = {"id": order['id']}
-            cancel_response = user_sess['fyers'].cancel_order(data=data)
-            if cancel_response and cancel_response.get('s') == 'ok':
-                update_order_status(username, order['id'], 'CANCELLED')
-                cancelled_orders.append(order['id'])
-                if order['id'] in user_sess['open_orders']:
-                    user_sess['open_orders'].remove(order['id'])
-
-        return {"cancelled_count": len(cancelled_orders), "cancelled_orders": cancelled_orders}
-    except Exception as e:
-        print(f"❌ Cancel all orders error for {username}:", e)
-        return None
-
-def close_position_by_symbol(username, symbol, qty):
-    """Close a position by placing an opposite order with both brokers"""
-    user_sess = get_user_session(username)
-    try:
-        # Close with Fyers
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-        else:
-            data = {"symbols": symbol}
-            quote_response = user_sess['fyers'].quotes(data=data)
-            if not quote_response or 'd' not in quote_response or len(quote_response['d']) == 0:
-                print(f"❌ Failed to get quote for {symbol}")
-            else:
-                current_price = quote_response['d'][0].get('v', {}).get('lp', 0)
-                if current_price != 0:
-                    data = {
-                        "symbol": symbol,
-                        "qty": qty,
-                        "type": 2,
-                        "side": -1,
-                        "productType": "INTRADAY",
-                        "limitPrice": 0,
-                        "stopPrice": 0,
-                        "validity": "DAY",
-                        "disclosedQty": 0,
-                        "offlineOrder": False,
-                        "orderTag": "closeposition"
-                    }
-                    response = user_sess['fyers'].place_order(data=data)
-                    print(f"✅ Position closed for {username}:", response)
-
-                    if response and response.get('s') == 'ok':
-                        order_id = response.get('id')
-                        order_data = {
-                            'order_id': order_id,
-                            'symbol': symbol,
-                            'price': current_price,
-                            'side': -1,
-                            'qty': qty,
-                            'status': 'PLACED',
-                            'type': 'CLOSE',
-                            'broker': 'Fyers'
-                        }
-                        save_order(username, order_data)
-
-        # Close with mStock
-        mstock_symbol = symbol
-        if ":" in symbol:
-            parts = symbol.split(":")
-            if len(parts) > 1:
-                mstock_symbol = parts[1].replace("-", "")
-        
-        place_mstock_order(
-            username, 
-            mstock_symbol, 
-            "SELL", 
-            qty,
-            order_type="MARKET",
-            price=0
-        )
-
-        return {"status": "success"}
-    except Exception as e:
-        print(f"❌ Close position error for {username}: {e}")
-        return None
-
-def close_position(username, order_id):
-    """Close position with Fyers"""
-    user_sess = get_user_session(username)
-    try:
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-            return None
-
-        orders = get_user_orders(username)
-        order_to_close = None
-        for order in orders:
-            if order.get('order_id') == order_id:
-                order_to_close = order
-                break
-
-        if not order_to_close:
-            print(f"❌ Order {order_id} not found for {username}")
-            return None
-
-        close_side = -1 if order_to_close['side'] == 1 else 1
-
-        data = {
-            "symbol": order_to_close['symbol'],
-            "qty": order_to_close['qty'],
-            "type": 2,
-            "side": close_side,
-            "productType": "INTRADAY",
-            "limitPrice": 0,
-            "stopPrice": 0,
-            "validity": "DAY",
-            "disclosedQty": 0,
-            "offlineOrder": False,
-            "orderTag": "closeposition"
-        }
-        response = user_sess['fyers'].place_order(data=data)
-        print(f"✅ Position closed for {username}:", response)
-
-        if response and response.get('s') == 'ok':
-            update_order_status(username, order_id, 'CLOSED')
-            if order_id in user_sess['open_orders']:
-                user_sess['open_orders'].remove(order_id)
-
-        return response
-    except Exception as e:
-        print(f"❌ Close position error for {username}: {e}")
-        return None
-
-def get_positions(username):
-    """Get positions from Fyers"""
-    user_sess = get_user_session(username)
-    try:
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-            return None
-
-        response = user_sess['fyers'].positions()
-        return response
-    except Exception as e:
-        print(f"❌ Get positions error for {username}: {e}")
-        return None
-
-def get_order_book(username):
-    """Get order book from Fyers"""
-    user_sess = get_user_session(username)
-    try:
-        if user_sess['fyers'] is None:
-            print(f"❌ Fyers not initialized for {username}")
-            return None
-
-        response = user_sess['fyers'].orderbook()
-        return response
-    except Exception as e:
-        print(f"❌ Get order book error for {username}: {e}")
-        return None
 
 def process_option_chain(username, df_pivot, response):
     """Process option chain data and place orders with both brokers if conditions are met"""
@@ -1156,14 +910,16 @@ def setup_credentials():
     if request.method == "POST":
         client_id = request.form.get("client_id")
         secret_key = request.form.get("secret_key")
+        mstock_api_key = request.form.get("mstock_api_key")
 
         if client_id and secret_key:
-            save_user_credentials(username, client_id=client_id, secret_key=secret_key)
+            save_user_credentials(username, client_id=client_id, secret_key=secret_key, mstock_api_key=mstock_api_key)
             return redirect(url_for('fyers_login'))
 
     return render_template_string(CREDENTIALS_TEMPLATE,
                                    client_id=creds['client_id'] if creds else "",
-                                   secret_key=creds['secret_key'] if creds else "")
+                                   secret_key=creds['secret_key'] if creds else "",
+                                   mstock_api_key=creds['mstock_api_key'] if creds else "")
 
 @app.route("/fyers_login")
 @login_required
@@ -1316,87 +1072,6 @@ def reset_orders():
     
     return jsonify({"message": "✅ Reset successful! ATM strike updated."})
 
-@app.route("/orders")
-@login_required
-def get_orders():
-    username = session['username']
-    orders = get_user_orders(username)
-    return jsonify({"orders": orders})
-
-@app.route("/positions")
-@login_required
-def get_positions_data():
-    username = session['username']
-    positions = get_positions(username)
-    return jsonify({"positions": positions})
-
-@app.route("/orderbook")
-@login_required
-def get_orderbook_data():
-    username = session['username']
-    orderbook = get_order_book(username)
-    return jsonify({"orderbook": orderbook})
-
-@app.route("/close_position", methods=["POST"])
-@login_required
-def close_position_route():
-    username = session['username']
-    order_id = request.json.get('order_id')
-
-    if not order_id:
-        return jsonify({"error": "Order ID is required"})
-
-    response = close_position(username, order_id)
-    if response and response.get('s') == 'ok':
-        return jsonify({"message": "✅ Position closed successfully!"})
-    else:
-        return jsonify({"error": "❌ Failed to close position"})
-
-@app.route("/close_position_by_symbol", methods=["POST"])
-@login_required
-def close_position_by_symbol_route():
-    username = session['username']
-    symbol = request.json.get('symbol')
-    qty = request.json.get('qty')
-
-    if not symbol or not qty:
-        return jsonify({"error": "Symbol and quantity are required"})
-
-    response = close_position_by_symbol(username, symbol, int(qty))
-    if response and response.get('status') == 'success':
-        return jsonify({"message": "✅ Position closed successfully!"})
-    else:
-        return jsonify({"error": "❌ Failed to close position"})
-
-@app.route("/cancel_order", methods=["POST"])
-@login_required
-def cancel_order_route():
-    username = session['username']
-    order_id = request.json.get('order_id')
-
-    if not order_id:
-        return jsonify({"error": "Order ID is required"})
-
-    response = cancel_order(username, order_id)
-    if response and response.get('s') == 'ok':
-        return jsonify({"message": "✅ Order cancelled successfully!"})
-    else:
-        return jsonify({"error": "❌ Failed to cancel order"})
-
-@app.route("/cancel_all_orders", methods=["POST"])
-@login_required
-def cancel_all_orders_route():
-    username = session['username']
-
-    response = cancel_all_orders(username)
-    if response:
-        return jsonify({
-            "message": f"✅ {response['cancelled_count']} orders cancelled successfully!",
-            "cancelled_orders": response['cancelled_orders']
-        })
-    else:
-        return jsonify({"error": "❌ Failed to cancel orders"})
-
 # New routes for dual broker operations
 @app.route("/place_dual_order", methods=["POST"])
 @login_required
@@ -1434,86 +1109,6 @@ def place_dual_order():
             "message": "Failed to place orders with both brokers",
             "fyers": response.get("fyers"),
             "mstock": response.get("mstock")
-        }), 400
-
-@app.route("/cancel_dual_order", methods=["POST"])
-@login_required
-def cancel_dual_order():
-    username = session['username']
-    order_id = request.json.get('order_id')
-    broker = request.json.get('broker', 'all')  # 'fyers', 'mstock', or 'all'
-    
-    if not order_id:
-        return jsonify({
-            "status": "error",
-            "message": "Order ID is required"
-        }), 400
-    
-    results = {}
-    
-    # Cancel Fyers order if requested
-    if broker in ['fyers', 'all']:
-        fyers_response = cancel_order(username, order_id)
-        results['fyers'] = fyers_response
-    
-    # Cancel mStock order if requested
-    if broker in ['mstock', 'all']:
-        # Get the order details to find the mStock order ID
-        orders = get_user_orders(username)
-        mstock_order_id = None
-        
-        for order in orders:
-            if order.get('order_id') == order_id and order.get('broker') == 'mStock':
-                mstock_order_id = order_id
-                break
-        
-        if mstock_order_id:
-            user_sess = get_user_session(username)
-            access_token = user_sess.get('mstock_access_token')
-            
-            if access_token:
-                try:
-                    headers = {
-                        'X-Mirae-Version': '1',
-                        'Authorization': f'token {MSTOCK_API_KEY}:{access_token}',
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    }
-                    
-                    response = requests.post(
-                        f'https://api.mstock.trade/openapi/typea/orders/cancel',
-                        headers=headers,
-                        data={'orderid': mstock_order_id}
-                    )
-                    
-                    resp_json = response.json()
-                    
-                    if resp_json.get("status") == "success":
-                        update_order_status(username, mstock_order_id, 'CANCELLED')
-                        results['mstock'] = {"status": "success", "order_id": mstock_order_id}
-                    else:
-                        results['mstock'] = {"status": "error", "message": resp_json.get("message", "Failed to cancel")}
-                except Exception as e:
-                    results['mstock'] = {"status": "error", "message": str(e)}
-            else:
-                results['mstock'] = {"status": "error", "message": "mStock not authenticated"}
-        else:
-            results['mstock'] = {"status": "error", "message": "mStock order not found"}
-    
-    # Check if at least one cancellation was successful
-    fyers_success = results.get("fyers", {}).get("s") == "ok"
-    mstock_success = results.get("mstock", {}).get("status") == "success"
-    
-    if fyers_success or mstock_success:
-        return jsonify({
-            "status": "success",
-            "message": "Orders cancelled successfully",
-            "results": results
-        })
-    else:
-        return jsonify({
-            "status": "error",
-            "message": "Failed to cancel orders",
-            "results": results
         }), 400
 
 # ---- HTML Templates ----
@@ -1602,17 +1197,29 @@ CREDENTIALS_TEMPLATE = """
         button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none;
                  border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
         .info { background: #e3f2fd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .section { margin-bottom: 25px; }
+        .section h3 { color: #333; margin-bottom: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🔑 Setup Fyers Credentials</h2>
-        <div class="info"><strong>Note:</strong> Enter your Fyers API credentials.</div>
-        <form method="POST">
-            <input type="text" name="client_id" placeholder="Fyers Client ID" value="{{ client_id }}" required>
-            <input type="text" name="secret_key" placeholder="Fyers Secret Key" value="{{ secret_key }}" required>
-            <button type="submit">Save & Continue to Login</button>
-        </form>
+        <h2>🔑 Setup API Credentials</h2>
+        
+        <div class="section">
+            <h3>Fyers API Credentials</h3>
+            <div class="info"><strong>Note:</strong> Enter your Fyers API credentials.</div>
+            <form method="POST">
+                <input type="text" name="client_id" placeholder="Fyers Client ID" value="{{ client_id }}" required>
+                <input type="text" name="secret_key" placeholder="Fyers Secret Key" value="{{ secret_key }}" required>
+        </div>
+        
+        <div class="section">
+            <h3>mStock API Credentials</h3>
+            <div class="info"><strong>Note:</strong> Enter your mStock API Key. The API secret is fixed.</div>
+                <input type="text" name="mstock_api_key" placeholder="mStock API Key" value="{{ mstock_api_key }}" required>
+                <button type="submit">Save & Continue to Login</button>
+            </form>
+        </div>
     </div>
 </body>
 </html>
@@ -1641,11 +1248,22 @@ MSTOCK_AUTH_TEMPLATE = """
         .hidden { display: none; }
         .back-link { text-align: center; margin-top: 20px; }
         .back-link a { color: #667eea; text-decoration: none; }
+        .api-key-info { background-color: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>m.Stock API Authentication</h2>
+        
+        {% if mstock_api_key %}
+            <div class="api-key-info">
+                <strong>Using API Key:</strong> {{ mstock_api_key }}
+            </div>
+        {% else %}
+            <div class="error">
+                <strong>Error:</strong> mStock API key not configured. Please <a href="/setup_credentials">setup your mStock credentials</a> first.
+            </div>
+        {% endif %}
 
         <div id="otp-section" class="form-container {% if access_token %}hidden{% endif %}">
             <h3>Enter OTP to Generate Session</h3>
@@ -1898,14 +1516,6 @@ MAIN_TEMPLATE = """
         .signals { max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; }
         .signal-item { padding: 5px; margin: 2px 0; background: #e9ecef; border-radius: 3px; }
         .user-info { text-align: right; color: #666; font-size: 14px; }
-        .tabs { display: flex; border-bottom: 2px solid #667eea; margin-bottom: 20px; }
-        .tab { padding: 10px 20px; cursor: pointer; background: #f8f9fa; border: 1px solid #ddd; border-bottom: none; margin-right: 5px; }
-        .tab.active { background: white; border-bottom: 2px solid white; margin-bottom: -2px; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .broker-badge { padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: bold; }
-        .broker-fyers { background: #007bff; color: white; }
-        .broker-mstock { background: #28a745; color: white; }
         .auth-status { text-align: center; margin: 20px 0; }
         .status-badge { padding: 5px 15px; border-radius: 20px; font-weight: bold; }
         .status-success { background-color: #d4edda; color: #155724; }
@@ -1968,7 +1578,7 @@ MAIN_TEMPLATE = """
             <a href="/">Dashboard</a>
             <a href="/mstock_auth">mStock Auth</a>
             <a href="/fyers_auth">Fyers Auth</a>
-            <a href="/setup_credentials">Fyers Setup</a>
+            <a href="/setup_credentials">API Setup</a>
             <a href="/logout">Logout</a>
         </div>
     </div>
@@ -2036,41 +1646,10 @@ MAIN_TEMPLATE = """
             <h2>📈 Trading Signals</h2>
             <div id="signals" class="signals"></div>
         </div>
-
-        <div class="card">
-            <h2>📋 Orders & Positions</h2>
-            <div class="tabs">
-                <div class="tab active" onclick="showTab('orders')">Orders</div>
-                <div class="tab" onclick="showTab('positions')">Positions</div>
-                <div class="tab" onclick="showTab('orderbook')">Order Book</div>
-            </div>
-            <div id="orders" class="tab-content active">
-                <button onclick="loadOrders()" class="btn btn-info">Load Orders</button>
-                <div id="orders-list"></div>
-            </div>
-            <div id="positions" class="tab-content">
-                <button onclick="loadPositions()" class="btn btn-info">Load Positions</button>
-                <div id="positions-list"></div>
-            </div>
-            <div id="orderbook" class="tab-content">
-                <button onclick="loadOrderBook()" class="btn btn-info">Load Order Book</button>
-                <button onclick="cancelAllOrders()" class="btn btn-danger">Cancel All Orders</button>
-                <div id="orderbook-list"></div>
-            </div>
-        </div>
     </div>
 
     <script>
         let botInterval;
-        let currentTab = 'orders';
-
-        function showTab(tabName) {
-            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-            event.target.classList.add('active');
-            document.getElementById(tabName).classList.add('active');
-            currentTab = tabName;
-        }
 
         function showStatus(message, type = 'info') {
             const statusDiv = document.getElementById('status');
@@ -2235,180 +1814,12 @@ MAIN_TEMPLATE = """
             }, 2000);
         }
 
-        async function loadOrders() {
-            try {
-                const response = await fetch('/orders');
-                const data = await response.json();
-                
-                let html = '<table class="table"><thead><tr><th>Order ID</th><th>Symbol</th><th>Price</th><th>Quantity</th><th>Status</th><th>Broker</th><th>Action</th></tr></thead><tbody>';
-                
-                data.orders.forEach(order => {
-                    const brokerClass = order.broker === 'mStock' ? 'broker-mstock' : 'broker-fyers';
-                    html += `<tr>
-                        <td>${order.order_id}</td>
-                        <td>${order.symbol}</td>
-                        <td>${order.price}</td>
-                        <td>${order.qty}</td>
-                        <td>${order.status}</td>
-                        <td><span class="broker-badge ${brokerClass}">${order.broker || 'Fyers'}</span></td>
-                        <td>
-                            ${order.type === 'OPEN' ? `<button onclick="closePosition('${order.order_id}', '${order.broker || 'fyers'}')" class="btn btn-warning">Close</button>` : ''}
-                            <button onclick="cancelOrder('${order.order_id}', '${order.broker || 'fyers'}')" class="btn btn-danger">Cancel</button>
-                        </td>
-                    </tr>`;
-                });
-                
-                html += '</tbody></table>';
-                document.getElementById('orders-list').innerHTML = html;
-            } catch (error) {
-                showStatus('Error loading orders: ' + error.message, 'error');
-            }
-        }
-
-        async function loadPositions() {
-            try {
-                const response = await fetch('/positions');
-                const data = await response.json();
-                
-                let html = '<table class="table"><thead><tr><th>Symbol</th><th>Quantity</th><th>P&L</th><th>Action</th></tr></thead><tbody>';
-                
-                if (data.positions && data.positions.netPositions) {
-                    data.positions.netPositions.forEach(position => {
-                        const plValue = parseFloat(position.pl);
-                        const plClass = plValue < 0 ? 'negative' : 'positive';
-                        html += `<tr>
-                            <td>${position.symbol}</td>
-                            <td>${position.netQty}</td>
-                            <td class="${plClass}">${position.pl}</td>
-                            <td>
-                                <button onclick="closePositionBySymbol('${position.symbol}', ${Math.abs(position.netQty)})" class="btn btn-warning">Close</button>
-                            </td>
-                        </tr>`;
-                    });
-                }
-                
-                html += '</tbody></table>';
-                document.getElementById('positions-list').innerHTML = html;
-            } catch (error) {
-                showStatus('Error loading positions: ' + error.message, 'error');
-            }
-        }
-
-        async function loadOrderBook() {
-            try {
-                const response = await fetch('/orderbook');
-                const data = await response.json();
-                
-                let html = '<table class="table"><thead><tr><th>Order ID</th><th>Symbol</th><th>Quantity</th><th>Price</th><th>Status</th><th>Action</th></tr></thead><tbody>';
-                
-                if (data.orderbook && data.orderbook.orderBook) {
-                    data.orderbook.orderBook.forEach(order => {
-                        html += `<tr>
-                            <td>${order.id}</td>
-                            <td>${order.symbol}</td>
-                            <td>${order.qty}</td>
-                            <td>${order.limitPrice || 'MARKET'}</td>
-                            <td>${order.statusText}</td>
-                            <td>
-                                <button onclick="cancelOrder('${order.id}', 'fyers')" class="btn btn-danger">Cancel</button>
-                            </td>
-                        </tr>`;
-                    });
-                }
-                
-                html += '</tbody></table>';
-                document.getElementById('orderbook-list').innerHTML = html;
-            } catch (error) {
-                showStatus('Error loading order book: ' + error.message, 'error');
-            }
-        }
-
-        async function closePosition(orderId, broker = 'all') {
-            try {
-                const response = await fetch('/close_position', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ order_id: orderId })
-                });
-                const data = await response.json();
-                
-                if (data.error) {
-                    showStatus(data.error, 'error');
-                } else {
-                    showStatus(data.message, 'success');
-                    loadOrders();
-                }
-            } catch (error) {
-                showStatus('Error closing position: ' + error.message, 'error');
-            }
-        }
-
-        async function closePositionBySymbol(symbol, quantity) {
-            try {
-                const response = await fetch('/close_position_by_symbol', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol: symbol, qty: quantity })
-                });
-                const data = await response.json();
-                
-                if (data.error) {
-                    showStatus(data.error, 'error');
-                } else {
-                    showStatus(data.message, 'success');
-                    loadPositions();
-                }
-            } catch (error) {
-                showStatus('Error closing position: ' + error.message, 'error');
-            }
-        }
-
-        async function cancelOrder(orderId, broker = 'all') {
-            try {
-                const response = await fetch('/cancel_dual_order', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ order_id: orderId, broker: broker })
-                });
-                const data = await response.json();
-                
-                if (data.error) {
-                    showStatus(data.error, 'error');
-                } else {
-                    showStatus(data.message, 'success');
-                    if (currentTab === 'orders') loadOrders();
-                    if (currentTab === 'orderbook') loadOrderBook();
-                }
-            } catch (error) {
-                showStatus('Error cancelling order: ' + error.message, 'error');
-            }
-        }
-
-        async function cancelAllOrders() {
-            if (!confirm('Are you sure you want to cancel all orders?')) return;
-            
-            try {
-                const response = await fetch('/cancel_all_orders', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.error) {
-                    showStatus(data.error, 'error');
-                } else {
-                    showStatus(data.message, 'success');
-                    loadOrderBook();
-                }
-            } catch (error) {
-                showStatus('Error cancelling orders: ' + error.message, 'error');
-            }
-        }
-
         // Auto-refresh option chain every 5 seconds
         setInterval(fetchOptionChain, 5000);
         
         // Initial load
         window.onload = function() {
             fetchOptionChain();
-            loadOrders();
         };
     </script>
 </body>
@@ -2423,7 +1834,6 @@ if __name__ == "__main__":
     print(f"📍 Server: http://127.0.0.1:{port}")
     print("📝 Users stored in: users.txt")
     print("🔑 Credentials stored in: user_credentials.txt")
-    print("📋 Orders stored in: orders.txt")
     print("="*60)
     print("\nmStock API Routes:")
     print("  POST /mstock/login - Authenticate with OTP")
@@ -2437,6 +1847,5 @@ if __name__ == "__main__":
     print("  GET  /fyers_login - Direct Fyers login")
     print("\nDual Broker Routes:")
     print("  POST /place_dual_order - Place order with both brokers")
-    print("  POST /cancel_dual_order - Cancel order with specified broker(s)")
     print("="*60 + "\n")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
