@@ -1207,6 +1207,8 @@ CREDENTIALS_TEMPLATE = """
         
         <div class="section">
             <h3>Fyers API Credentials</h3>
+            <h4>VMS68P9EK0-100   ZJ0CFWZEL1 </h4>
+            <h4>CJOHJvQ/lUBtRZSXIVAtd3wkLRaSDpVGbO92K+FAIo8=</h4>
             <div class="info"><strong>Note:</strong> Enter your Fyers API credentials.</div>
             <form method="POST">
                 <input type="text" name="client_id" placeholder="Fyers Client ID" value="{{ client_id }}" required>
