@@ -1207,7 +1207,7 @@ CREDENTIALS_TEMPLATE = """
         
         <div class="section">
             <h3>Fyers API Credentials</h3>
-            <h4>VMS68P9EK0-100   ZJ0CFWZEL1 </h4>
+            <h4>JFSHKMD0A8-200   xFB61Xa58rBN8SWP</h4>
             <h4>CJOHJvQ/lUBtRZSXIVAtd3wkLRaSDpVGbO92K+FAIo8=</h4>
             <div class="info"><strong>Note:</strong> Enter your Fyers API credentials.</div>
             <form method="POST">
